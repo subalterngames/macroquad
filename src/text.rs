@@ -340,12 +340,12 @@ impl CharacterTexture {
     }
 }
 
+/// A string as a vec of textures.
+/// This is efficient if you want to draw the same text per frame.
 pub struct StringTexture {
     characters: Vec<CharacterTexture>
 }
 
-/// A character as a vec of textures.
-/// This is efficient if you want to draw the same text per frame.
 impl StringTexture {
     /// Convert a text string to a vec of characters.
     pub fn new(
