@@ -256,7 +256,7 @@ impl<'a> Default for TextParams<'a> {
 
 /// A character as a texture.
 /// This is efficient if you want to draw the same text per frame.
-pub struct CharacterTexture {
+struct CharacterTexture {
     texture: miniquad::TextureId,
     x: f32,
     y: f32,
@@ -327,17 +327,37 @@ impl CharacterTexture {
         }
     }
 
+    fn draw(&self) {
+        crate::texture::draw_texture_ex(
+            &crate::texture::Texture2D {
+                texture: TextureHandle::Unmanaged(self.texture),
+            },
+            self.x,
+            self.y,
+            self.color,
+            self.params.clone(),
+        );
+    }
+}
+
+pub struct StringTexture {
+    characters: Vec<CharacterTexture>
+}
+
+/// A character as a vec of textures.
+/// This is efficient if you want to draw the same text per frame.
+impl StringTexture {
     /// Convert a text string to a vec of characters.
-    pub fn new_vec(
+    pub fn new(
         text: &str,
         x: f32,
         y: f32,
         font: &Font,
         params: &TextParams,
-    ) -> Vec<CharacterTexture> {
+    ) -> Self {
         let (font, font_scale_x, font_scale_y, dpi_scaling, font_size) = get_font_params(&params);
         let mut total_width = 0.;
-        text.chars()
+        Self { characters: text.chars()
             .map(|c| {
                 CharacterTexture::new(
                     c,
@@ -352,20 +372,12 @@ impl CharacterTexture {
                     &params,
                 )
             })
-            .collect()
+            .collect() }
     }
 
-    /// Draw the character.
+    /// Draw each character texture.
     pub fn draw(&self) {
-        crate::texture::draw_texture_ex(
-            &crate::texture::Texture2D {
-                texture: TextureHandle::Unmanaged(self.texture),
-            },
-            self.x,
-            self.y,
-            self.color,
-            self.params.clone(),
-        );
+        self.characters.iter().for_each(|c| c.draw());
     }
 }
 
