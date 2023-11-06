@@ -6,6 +6,7 @@ use crate::{
     color::Color,
     get_context, get_quad_context,
     math::{vec3, Rect},
+    prelude::DrawTextureParams,
     texture::{Image, TextureHandle},
     Error,
 };
@@ -253,6 +254,121 @@ impl<'a> Default for TextParams<'a> {
     }
 }
 
+/// A character as a texture.
+/// This is efficient if you want to draw the same text per frame.
+pub struct CharacterTexture {
+    texture: miniquad::TextureId,
+    x: f32,
+    y: f32,
+    params: DrawTextureParams,
+    color: Color,
+}
+
+impl CharacterTexture {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        character: char,
+        x: f32,
+        y: f32,
+        font: &Font,
+        font_size: u16,
+        font_scale_x: f32,
+        font_scale_y: f32,
+        dpi_scaling: f32,
+        total_width: &mut f32,
+        params: &TextParams,
+    ) -> Self {
+        if !font
+            .characters
+            .lock()
+            .unwrap()
+            .contains_key(&(character, font_size))
+        {
+            font.cache_glyph(character, font_size);
+        }
+        let mut atlas = font.atlas.lock().unwrap();
+        let font_data = &font.characters.lock().unwrap()[&(character, font_size)];
+        let glyph = atlas.get(font_data.sprite).unwrap().rect;
+        let angle_rad = params.rotation;
+        let left_coord = (font_data.offset_x as f32 * font_scale_x + *total_width)
+            * angle_rad.cos()
+            + (glyph.h as f32 * font_scale_y + font_data.offset_y as f32 * font_scale_y)
+                * angle_rad.sin();
+        let top_coord = (font_data.offset_x as f32 * font_scale_x + *total_width) * angle_rad.sin()
+            + (0.0 - glyph.h as f32 * font_scale_y - font_data.offset_y as f32 * font_scale_y)
+                * angle_rad.cos();
+        *total_width += font_data.advance * font_scale_x;
+
+        let dest = Rect::new(
+            left_coord / dpi_scaling as f32 + x,
+            top_coord / dpi_scaling as f32 + y,
+            glyph.w as f32 / dpi_scaling as f32 * font_scale_x,
+            glyph.h as f32 / dpi_scaling as f32 * font_scale_y,
+        );
+
+        let source = Rect::new(
+            glyph.x as f32,
+            glyph.y as f32,
+            glyph.w as f32,
+            glyph.h as f32,
+        );
+        Self {
+            texture: atlas.texture(),
+            x: dest.x,
+            y: dest.y,
+            params: crate::texture::DrawTextureParams {
+                dest_size: Some(vec2(dest.w, dest.h)),
+                source: Some(source),
+                rotation: angle_rad,
+                pivot: Option::Some(vec2(dest.x, dest.y)),
+                ..Default::default()
+            },
+            color: params.color,
+        }
+    }
+
+    /// Convert a text string to a vec of characters.
+    pub fn new_vec(
+        text: &str,
+        x: f32,
+        y: f32,
+        font: &Font,
+        params: &TextParams,
+    ) -> Vec<CharacterTexture> {
+        let (font, font_scale_x, font_scale_y, dpi_scaling, font_size) = get_font_params(&params);
+        let mut total_width = 0.;
+        text.chars()
+            .map(|c| {
+                CharacterTexture::new(
+                    c,
+                    x,
+                    y,
+                    &font,
+                    font_size,
+                    font_scale_x,
+                    font_scale_y,
+                    dpi_scaling,
+                    &mut total_width,
+                    &params,
+                )
+            })
+            .collect()
+    }
+
+    /// Draw the character.
+    pub fn draw(&self) {
+        crate::texture::draw_texture_ex(
+            &crate::texture::Texture2D {
+                texture: TextureHandle::Unmanaged(self.texture),
+            },
+            self.x,
+            self.y,
+            self.color,
+            self.params.clone(),
+        );
+    }
+}
+
 /// Load font from file with "path"
 pub async fn load_ttf_font(path: &str) -> Result<Font, Error> {
     let bytes = crate::file::load_file(path)
@@ -297,6 +413,26 @@ pub fn draw_text(text: &str, x: f32, y: f32, font_size: f32, color: Color) {
 
 /// Draw text with custom params such as font, font size and font scale.
 pub fn draw_text_ex(text: &str, x: f32, y: f32, params: TextParams) {
+    let (font, font_scale_x, font_scale_y, dpi_scaling, font_size) = get_font_params(&params);
+    let mut total_width = 0.;
+    for character in text.chars() {
+        let char_texture = CharacterTexture::new(
+            character,
+            x,
+            y,
+            &font,
+            font_size,
+            font_scale_x,
+            font_scale_y,
+            dpi_scaling,
+            &mut total_width,
+            &params,
+        );
+        char_texture.draw();
+    }
+}
+
+fn get_font_params<'a>(params: &'a TextParams) -> (&'a Font, f32, f32, f32, u16) {
     let font = params
         .font
         .unwrap_or(&get_context().fonts_storage.default_font);
@@ -307,59 +443,7 @@ pub fn draw_text_ex(text: &str, x: f32, y: f32, params: TextParams) {
 
     let font_size = (params.font_size as f32 * dpi_scaling).ceil() as u16;
 
-    let mut total_width = 0.;
-    for character in text.chars() {
-        if !font
-            .characters
-            .lock()
-            .unwrap()
-            .contains_key(&(character, font_size))
-        {
-            font.cache_glyph(character, font_size);
-        }
-        let mut atlas = font.atlas.lock().unwrap();
-        let font_data = &font.characters.lock().unwrap()[&(character, font_size)];
-        let glyph = atlas.get(font_data.sprite).unwrap().rect;
-        let angle_rad = params.rotation;
-        let left_coord = (font_data.offset_x as f32 * font_scale_x + total_width) * angle_rad.cos()
-            + (glyph.h as f32 * font_scale_y + font_data.offset_y as f32 * font_scale_y)
-                * angle_rad.sin();
-        let top_coord = (font_data.offset_x as f32 * font_scale_x + total_width) * angle_rad.sin()
-            + (0.0 - glyph.h as f32 * font_scale_y - font_data.offset_y as f32 * font_scale_y)
-                * angle_rad.cos();
-
-        total_width += font_data.advance * font_scale_x;
-
-        let dest = Rect::new(
-            left_coord / dpi_scaling as f32 + x,
-            top_coord / dpi_scaling as f32 + y,
-            glyph.w as f32 / dpi_scaling as f32 * font_scale_x,
-            glyph.h as f32 / dpi_scaling as f32 * font_scale_y,
-        );
-
-        let source = Rect::new(
-            glyph.x as f32,
-            glyph.y as f32,
-            glyph.w as f32,
-            glyph.h as f32,
-        );
-
-        crate::texture::draw_texture_ex(
-            &crate::texture::Texture2D {
-                texture: TextureHandle::Unmanaged(atlas.texture()),
-            },
-            dest.x,
-            dest.y,
-            params.color,
-            crate::texture::DrawTextureParams {
-                dest_size: Some(vec2(dest.w, dest.h)),
-                source: Some(source),
-                rotation: angle_rad,
-                pivot: Option::Some(vec2(dest.x, dest.y)),
-                ..Default::default()
-            },
-        );
-    }
+    (font, font_scale_x, font_scale_y, dpi_scaling, font_size)
 }
 
 /// Get the text center.
